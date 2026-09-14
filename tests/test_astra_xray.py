@@ -23,6 +23,7 @@ from xray import constants as C  # noqa: E402
 from xray.frontmatter import read_skill  # noqa: E402
 
 HUGE = 10**12
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def run_cli(module, *argv):
@@ -88,6 +89,15 @@ class BudgetMatchesCodex(unittest.TestCase):
     def test_description_cap(self):
         self.assertEqual(budget.truncate_description("a" * 1024), "a" * 1024)
         self.assertEqual(budget.truncate_description("a" * 1025), "a" * 1021 + "...")
+
+
+class DistributionLayout(unittest.TestCase):
+    def test_default_npx_source_exposes_exactly_one_skill(self):
+        skill_files = sorted((REPO_ROOT / "skills").glob("*/SKILL.md"))
+        self.assertEqual(
+            [path.relative_to(REPO_ROOT).as_posix() for path in skill_files],
+            ["skills/astra-xray/SKILL.md"],
+        )
 
 
 class SessionParsing(unittest.TestCase):

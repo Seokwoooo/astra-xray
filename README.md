@@ -25,14 +25,19 @@ Findings    14 (warn 6 · info 8) · protected 3
 
 ## Install
 
-Install globally for Codex with the open agent skills CLI:
+Install with the open agent skills CLI:
 
 ```bash
-npx skills add Seokwoooo/astra-xray --skill astra-xray -g -a codex
+npx skills add Seokwoooo/astra-xray
 ```
 
-For a non-interactive install, add `-y`. To install only in the current project,
-leave out `-g`.
+That is the full command: this repository contains one skill, and the installer
+detects Codex automatically. It installs into the current project by default.
+Add only `-g` if you want astra-xray available in every project:
+
+```bash
+npx skills add Seokwoooo/astra-xray -g
+```
 
 The installer discovers [`skills/astra-xray`](skills/astra-xray) directly; this
 repository does not ship or execute a separate npm package. Review skills before
