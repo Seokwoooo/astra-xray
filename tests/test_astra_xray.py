@@ -99,6 +99,18 @@ class DistributionLayout(unittest.TestCase):
             ["skills/astra-xray/SKILL.md"],
         )
 
+    def test_readmes_link_each_language_and_keep_the_short_install(self):
+        english = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        korean = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        command = "npx skills add Seokwoooo/astra-xray"
+
+        self.assertIn("README.ko.md", english)
+        self.assertIn("README.md", korean)
+        self.assertIn(command, english)
+        self.assertIn(command, korean)
+        self.assertNotIn("·", english)
+        self.assertNotIn("·", korean)
+
 
 class SessionParsing(unittest.TestCase):
     BODY = "\n".join([
