@@ -1,0 +1,4 @@
+interface:
+  display_name: "astra-xray"
+  short_description: "See and tune what Codex loads for GPT-6 Astra"
+  default_prompt: "Use $astra-xray to scan this setup for GPT-6 Astra and report what to change."
