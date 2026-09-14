@@ -25,11 +25,29 @@ Findings    14 (warn 6 · info 8) · protected 3
 
 ## Install
 
+Install globally for Codex with the open agent skills CLI:
+
+```bash
+npx skills add Seokwoooo/astra-xray --skill astra-xray -g -a codex
+```
+
+For a non-interactive install, add `-y`. To install only in the current project,
+leave out `-g`.
+
+The installer discovers [`skills/astra-xray`](skills/astra-xray) directly; this
+repository does not ship or execute a separate npm package. Review skills before
+installing them because they run with your agent's permissions.
+
+<details>
+<summary>Manual install (without Node.js)</summary>
+
 ```bash
 git clone --depth 1 https://github.com/Seokwoooo/astra-xray.git
 mkdir -p ~/.agents/skills
 cp -R astra-xray/skills/astra-xray ~/.agents/skills/
 ```
+
+</details>
 
 In Codex:
 
