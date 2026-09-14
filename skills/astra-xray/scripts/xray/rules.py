@@ -28,6 +28,9 @@ PROTECTED = re.compile(
     r"rm\s+-rf|delet|drop\s+(table|database)|truncate|migrat|force[- ]push|push\b|merge\b|"
     r"billing|payment|invoice|customer|pii|personal data|network|internet|connector|account|"
     r"irreversible|destructive|compliance|legal|budget|cost limit|"
+    r"source media|original|hash|signature|evidence|proven|placeholder|guess|fabricat|silently|"
+    r"explicitly authoriz|read.only|read only|scope|boundary|boundaries|bypass|captcha|cookie|"
+    r"원본|해시|증거|추측|조작|읽기 전용|우회|허위|권한|범위|"
     r"운영|배포|릴리스|비밀|시크릿|토큰|자격|비밀번호|키\b|삭제|드롭|마이그레이션|푸시|머지|결제|과금|고객|개인정보|네트워크|인터넷|계정|되돌릴 수 없|파괴|규정|컴플라이언스|비용",
     re.IGNORECASE,
 )
@@ -113,7 +116,11 @@ def lint_text(path: str, text: str) -> list[dict]:
             if pattern.search(line):
                 protected = rule_id in ("A4", "A5") and bool(PROTECTED.search(line))
                 note = "Protected topic: keep this rule; tighten wording only." if protected else None
-                results.append(finding(rule_id, "info" if rule_id == "A8" else "warn", title, source, path, number, line, note, protected))
+                item = finding(rule_id, "info" if rule_id in ("A4", "A8") else "warn", title, source, path, number, line, note, protected)
+                if rule_id in ("A4", "A5") and not protected:
+                    item["review_required"] = True
+                    item["note"] = "Unclassified boundary, not permission to delete it. Judge the purpose and surrounding text."
+                results.append(item)
     return results
 
 
@@ -123,7 +130,8 @@ def _tokens(text: str) -> set[str]:
 
 def lint_skills(inv: dict, listing: dict | None) -> list[dict]:
     results = []
-    editable = [s for s in inv["skills"] if s["root_kind"] in EDITABLE_ROOT_KINDS]
+    editable = [s for s in inv["skills"] if s["root_kind"] in EDITABLE_ROOT_KINDS
+                and s.get("provenance", {}).get("kind") not in ("managed", "upstream")]
 
     if listing:
         report = listing["report"]
@@ -178,10 +186,11 @@ def lint_skills(inv: dict, listing: dict | None) -> list[dict]:
     deprecated = [s for s in inv["skills"] if s["root_kind"] == "user-deprecated"]
     if deprecated:
         results.append(finding("S6", "info", "Skills in the deprecated ~/.codex/skills folder", "codex_roots",
-                               note=f"{len(deprecated)} skills. Codex still loads them; the current user folder is ~/.agents/skills.",
+                               note=f"{len(deprecated)} skills. Codex still loads them. This is location information, not a request to move or rename files; inspect dependencies only if migration was requested.",
                                data=[s["name"] for s in deprecated]))
     for name, paths in inv["duplicates"].items():
-        results.append(finding("S7", "info", "Same skill name in more than one place", "docs_skills", note=name, data=paths))
+        results.append(finding("S7", "info", "Same skill name in more than one place", "docs_skills",
+                               note=f"{name}: compare capabilities and ownership. A shared name alone does not prove redundancy. Use exact paths for any authorized exclusion.", data=paths))
 
     pairs = []
     token_sets = [(s, _tokens(s["description"])) for s in editable if not s["error"]]
@@ -244,8 +253,7 @@ def lint_config(cfg: dict, env: dict) -> list[dict]:
     cli = env.get("codex_cli")
     if cli and version_tuple(cli) < version_tuple(C.LATEST_KNOWN_CODEX):
         results.append(finding("C1", "info", "Codex CLI is older than the version these rules were checked against", "releases",
-                               note=f"Installed {cli}; rules checked against {C.LATEST_KNOWN_CODEX}. Update with "
-                                    "`npm install -g @openai/codex` (or the official installer in the Codex CLI docs), then rerun the scan."))
+                               note=f"Captured {cli}; rules pinned to {C.LATEST_KNOWN_CODEX}. This is a compatibility caveat, not a cleanup action. Desktop-bundled Codex and a shell CLI can be different installations."))
     policy = cfg.get("approval_policy")
     if policy in ("untrusted", "on-failure"):
         state = "no longer supported" if policy == "untrusted" else "deprecated"
@@ -253,14 +261,10 @@ def lint_config(cfg: dict, env: dict) -> list[dict]:
                                note="Use on-request for interactive runs or never for non-interactive runs."))
     model = env.get("model") or ""
     effort = cfg.get("model_reasoning_effort")
-    if "astra" in model and effort in ("none", "minimal"):
+    if cfg.get("model") == model and "astra" in model and effort in ("none", "minimal"):
         results.append(finding("C2", "warn", f"model_reasoning_effort = \"{effort}\" is not an Astra effort level", "model_guide",
                                note="Astra supports low and above. Start at low."))
-    configured = cfg.get("model")
-    if configured and "astra" not in str(configured):
-        results.append(finding("C3", "info", "Default model is not Astra", "docs_config",
-                               note=f"config.toml model = \"{configured}\". Fine if intended; findings below still assume Astra."))
     if cfg.get("sandbox_mode") == "danger-full-access" or cfg.get("approval_policy") == "never":
         results.append(finding("C5", "info", "Sandbox or approvals are off", "system_card", protected=True,
-                               note="With no harness guard, written safety rules are the only boundary. astra-xray will not relax them."))
+                               note="Written scope boundaries still matter. Preserve them; these settings are informational and are not cleanup targets."))
     return results

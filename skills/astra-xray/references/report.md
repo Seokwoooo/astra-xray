@@ -1,54 +1,70 @@
-# Reading the scan and reporting it
+# Reading the report
 
-## Report shape
+Write in the user's language. Lead with the result and the next useful action.
+Keep raw data in the timestamped JSON report.
 
-Write in the user's language. Lead with what Astra receives, then what to do.
+## What to report
 
-1. **Headline:** skills in the Astra target simulation, how many descriptions are cut or dropped, and whether Codex would warn about it. Name the model that captured the host catalog separately. Then give AGENTS.md bytes loaded against the limit and how many findings are protected.
-2. **Top actions (at most three):** each with its measured effect. Measure skill changes with `scan.py --without ...` before recommending them.
-3. **Findings:** grouped by skills, AGENTS.md and config. Give `file:line`, a short excerpt and the source. List protected findings separately under "keep".
+- Target model and catalog source. The captured model and configured model are
+  separate metadata. Neither needs to be Astra for this audit.
+- Catalog budget usage, description cuts and omitted skills. Always identify
+  estimates. Compare the same membership before and after edits.
+- Personal description review: how many need work, how many need ownership
+  verification and how many are excluded because upstream maintains them.
+- AGENTS.md findings, important protected boundaries and the report path.
 
-Do not paste whole files. Say plainly when numbers are estimates.
+Give at most three priority actions. Group repeated wording observations with a
+count. The full JSON contains every finding; do not paste dozens of keyword hits
+as if each were a confirmed defect. A4 is a context review signal. An unmarked
+line can still be an important boundary.
 
-## Where the numbers come from
+## Sources and comparisons
 
-`skills.listing.source` is either:
+`skills.listing.source`:
+- `session`: catalog captured in a matching task. Disk descriptions are used to
+  simulate the target model. Check freshness and cwd annotations for explicit logs.
+- `baseline`: known catalog membership updated with current file contents and
+  disabled entries. This avoids loading unrelated plugin cache files into a
+  before/after comparison. It remains an estimate until a fresh task confirms it.
+- `files`: discovery only. Low confidence. App skills may be absent and plugin
+  caches may be extra. Do not claim runtime truncation from this estimate.
 
-- `session`: a trusted `world_state.state.host_skills` catalog from a fresh session for the scanned directory. The source session can use any model; `environment.model` is the independent target, normally Astra. `calibration.reproduced_lines` compares the target simulation with captured lines, so it is a renderer check rather than proof that file discovery found every skill. If `catalog_complete` is false, state that the target result is a lower bound because the source session omitted unknown skills.
-- `files`: no matching catalog postdates the current skill/config files, so membership is a low-confidence estimate. App/plugin skills can be missing or extra. Suggest starting a fresh Codex task in that directory and rescanning; its model does not have to be Astra.
+`entries` preserves full descriptions for later baseline comparisons.
+`comparison` gives before/after budget units and description characters.
+`unobserved_files` lists files outside baseline membership, not new runtime skills.
+`unknown_omitted_from_capture` means some source skills could not be recovered.
+Call out an incomplete capture for baseline results too.
 
-When a session catalog exists, `skills.catalog_comparison` compares its membership with file discovery. Report `session_only_count` and `files_only_count` when either is nonzero. A perfect renderer calibration does not cancel a membership mismatch.
+`catalog_comparison` uses normalized Windows path identity without changing the
+paths used for rendering. Plugin cache versions still represent distinct files.
+The renderer line reproduction count is not inventory proof.
 
-Per-skill `status` describes the target simulation: `full`, `shortened`, `name_only` (description removed), or `omitted`. `captured_status` separately records `full`, `shortened`, `name_only`, `changed_since_session`, or `file_missing` for the source catalog.
+`description_audit.rows` contains each path, description, character/byte counts,
+estimated tokens, hash, enabled state, provenance and review disposition.
+The 200-character / 80-estimated-token thresholds are astra-xray heuristics.
+They are not OpenAI limits, enforced targets or proof that the text should shrink.
 
-`warning` is the text Codex shows, or null. Codex stays silent while `average_cut_chars` is 100 or less, even when many descriptions are cut. That gap is often worth pointing out.
+`provenance.kind` is managed, upstream, local or unverified.
+Only verified local ownership is editable. Installation location is not ownership.
+No installer record does not prove that a skill is personal.
 
-AGENTS.md `files[].status`: `loaded`, `truncated`, `dropped_budget_exhausted`, `empty`, `ignored_untrusted_project`. `shadows` lists files in the same folder that Codex skipped because an earlier name won.
+## Rule groups
 
-## Rule IDs
+S1 reports budget cuts. S2/S11 flag broad or pushy triggers. S3 flags overlap for
+review, not automatic merging. S4/S5 inspect body size and recipes. S6 reports a
+legacy path, not a migration request. S7 reports a shared name, not equivalent
+capabilities. S8 flags suspicious scripts without executing them. S9/S10 flag
+frontmatter issues. S12 surfaces long personal or unverified descriptions even
+below the budget.
 
-| ID | Meaning | Usual proposal |
-|---|---|---|
-| S1 | Budget cut or dropped descriptions | Turn off unused skills; put trigger words first in descriptions |
-| S2 | Broad trigger ("use when working with…") | Name the specific task instead |
-| S3 | Two skills with overlapping descriptions | Merge them or state the boundary |
-| S4 | Large SKILL.md | Split mode-specific detail into references, only if there are several modes |
-| S5 | Long numbered recipe | State the outcome and criteria; keep steps only where order matters |
-| S6 | Skill in deprecated `~/.codex/skills` | Move to `~/.agents/skills` |
-| S7 | Same name in several places | Rename or remove the stale copy |
-| S8 | Script pipes a download into a shell | Flag to the user; never run it |
-| S9, S10 | Description too long, or SKILL.md does not load | Fix the frontmatter |
-| S11 | Wording written to make agents trigger more often | Narrow it |
-| A1 | AGENTS.md cut by the byte limit | Move background material to docs and point to it |
-| A2 | Required reading before every edit | Replace with pointers tied to the situation |
-| A3 | Unconditional testing or re-checking | Remove, or allow a specific safe test workflow |
-| A4 | Strong "never" or "ask first" wording | Keep if protected; otherwise scope it |
-| A5 | Stops after a first pass | Replace with a definition of done |
-| A7 | Rule chosen by model self-identification | Move the rule to a place only that agent reads |
-| A8 | Names an older model | Check whether the rule was a workaround for that model |
-| A10 | An override file hides another file | Remove the empty override or merge the files |
-| A11 | Untrusted project; AGENTS.md ignored | Tell the user; trust is their decision |
-| A12 | File shared with other agents | Do not relax it for Astra alone |
-| C1–C5 | Codex version, effort, model, approval policy, open sandbox | Report; the user changes these |
+A1/A10/A11 concern loading, limits and trust. A2/A3/A5 concern forced workflow
+steps. A4/A7/A8 require contextual judgment. A12 marks shared instructions.
+C findings are configuration observations. Cleanup does not authorize changing
+the default model, CLI installation or security settings.
 
-Findings under a skill's own body are `info`: that skill's workflow may genuinely need the step. This includes strong boundaries and model-specific rules; judge each one in context instead of silently omitting it.
+## Completion record
+
+For each personal candidate use changed, kept with a reason or unresolved.
+Report upstream exclusions separately. Provide the backup path and the relevant
+restore command after applying. If something remains unresolved, describe it
+instead of claiming the entire cleanup is complete.

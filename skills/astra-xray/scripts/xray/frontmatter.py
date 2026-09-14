@@ -7,6 +7,8 @@ metadata.short-description. Values are collapsed to one line the same way Codex 
 from __future__ import annotations
 
 import re
+import json
+import hashlib
 from pathlib import Path
 
 from .constants import MAX_SKILL_NAME_CHARS
@@ -36,6 +38,10 @@ def _unquote(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] == "'":
         return value[1:-1].replace("''", "'")
     if len(value) >= 2 and value[0] == value[-1] == '"':
+        try:
+            return json.loads(value)
+        except ValueError:
+            pass  # YAML permits a few escapes that JSON does not.
         inner = value[1:-1]
         return inner.replace('\\"', '"').replace("\\n", " ").replace("\\\\", "\\")
     # Plain scalar: drop a trailing " # comment".
@@ -100,7 +106,8 @@ def read_skill(path: Path) -> dict:
         info["error"] = f"unreadable: {exc.strerror or exc}"
         return info
     info["raw_bytes"] = len(data)
-    contents = data.decode("utf-8", errors="replace")
+    info["sha256"] = hashlib.sha256(data).hexdigest()
+    contents = data.decode("utf-8-sig", errors="replace")
     extracted = extract_frontmatter(contents)
     if extracted is None:
         info["error"] = "missing YAML frontmatter delimited by ---"
@@ -124,6 +131,33 @@ def read_skill(path: Path) -> dict:
     elif not info["description"]:
         info["error"] = "missing field `description`"
     return info
+
+
+def replace_description(data: bytes, description: str) -> bytes:
+    """Replace one top-level YAML field; preserve BOM, CRLF, body and other fields."""
+    if not isinstance(description, str) or not description.strip() or "\n" in description or "\r" in description:
+        raise ValueError("description must be a non-empty single line")
+    text = data.decode("utf-8-sig")
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        raise ValueError("missing YAML frontmatter")
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if end is None:
+        raise ValueError("unclosed YAML frontmatter")
+    matches = [i for i in range(1, end) if re.match(r"^description\s*:", lines[i])]
+    if len(matches) != 1:
+        raise ValueError("expected exactly one description field")
+    start = matches[0]
+    stop = start + 1
+    while stop < end and (not lines[stop].strip() or lines[stop].startswith((" ", "\t"))):
+        stop += 1
+    # Keep spacing before the next independent field or frontmatter delimiter.
+    while stop > start + 1 and not lines[stop - 1].strip():
+        stop -= 1
+    newline = "\r\n" if lines[start].endswith("\r\n") else "\n"
+    result = "".join(lines[:start]) + "description: " + json.dumps(description, ensure_ascii=False) + newline + "".join(lines[stop:])
+    prefix = b"\xef\xbb\xbf" if data.startswith(b"\xef\xbb\xbf") else b""
+    return prefix + result.encode("utf-8")
 
 
 def implicit_invocation_allowed(skill_dir: Path) -> bool:

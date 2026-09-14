@@ -10,6 +10,8 @@ from . import constants as C
 from .agents_md import find_project_root
 from .config import get
 from .frontmatter import implicit_invocation_allowed, read_skill
+from .paths import local_key
+from .provenance import classify
 
 SCOPE_RANK = {"system": 0, "admin": 1, "repo": 2, "user": 3}
 
@@ -114,19 +116,24 @@ def _disabled_paths(cfg: dict) -> set[str]:
     for rule in get(cfg, "skills.config", []) or []:
         if isinstance(rule, dict) and rule.get("enabled") is False and rule.get("path"):
             try:
-                disabled.add(str(Path(rule["path"]).expanduser().resolve()))
+                disabled.add(local_key(rule["path"]))
             except OSError:
                 disabled.add(rule["path"])
     return disabled
 
 
-def inventory(cwd: Path, home: Path, cfg: dict) -> dict:
+def inventory(cwd: Path, home: Path, cfg: dict, local_skills=()) -> dict:
     roots = skill_roots(cwd, home, cfg)
     disabled = _disabled_paths(cfg)
     skills = []
+    seen = set()
     for root in roots:
         files = discover_skill_files(Path(root["path"]), follow_symlinks=root["scope"] != "system")
         for path in files:
+            identity = (root.get("namespace"), local_key(str(path)))
+            if identity in seen:
+                continue
+            seen.add(identity)
             info = read_skill(path)
             base_name = info["name"]
             info["name"] = f"{root['namespace']}:{base_name}" if root.get("namespace") else base_name
@@ -140,9 +147,10 @@ def inventory(cwd: Path, home: Path, cfg: dict) -> dict:
                 root_kind=root["kind"],
                 alias_root=root["path"],
                 alias_root_order=root["order"],
-                enabled=resolved not in disabled and str(path) not in disabled,
+                enabled=local_key(resolved) not in disabled and local_key(str(path)) not in disabled,
                 implicit=implicit_invocation_allowed(path.parent),
                 body_lines=info["body"].count("\n") + 1 if info["body"] else 0,
+                provenance=classify(path, root["kind"], local_skills),
             )
             info.pop("body", None)
             skills.append(info)

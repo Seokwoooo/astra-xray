@@ -36,12 +36,12 @@ def main(argv=None) -> int:
 
     try:
         if args.command == "create":
-            plan = json.loads(Path(args.plan).expanduser().read_text(encoding="utf-8"))
+            plan = json.loads(Path(args.plan).expanduser().read_text(encoding="utf-8-sig"))
             changes = [(p, action) for action in ("modify", "create", "delete") for p in plan.get(action, [])]
             if not changes:
                 raise RuntimeError("plan lists no files")
             if args.from_scan:
-                scan = json.loads(Path(args.from_scan).expanduser().read_text(encoding="utf-8"))
+                scan = json.loads(Path(args.from_scan).expanduser().read_text(encoding="utf-8-sig"))
                 changes += [(p, "surface") for p in scan.get("surface_files", [])]
             result = archive.create(changes, label=args.label)
         elif args.command == "seal":

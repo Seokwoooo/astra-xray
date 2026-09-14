@@ -1,77 +1,88 @@
-# Proposing changes
+# Preparing the edit
 
-Classify each finding before writing a diff:
+A request to patch the audited scope authorizes the normal implementation steps.
+Show the concrete diff and continue when that authorization already exists.
+Ask only when a missing decision changes scope or risks losing later work.
 
-- **KEEP**: protected (see [keep.md](keep.md)), or still true and useful. No change.
-- **TIGHTEN**: a protected rule whose wording also blocks safe work. Scope it so the protected action stays blocked.
-- **MOVE**: true, but not needed on every task. Move it to docs or references and leave a pointer that says when to read it.
-- **DROP**: exists only to push an older model: forced reading, forced testing, stopping after a first pass, model workarounds.
-- **RESOLVE**: two rules contradict. Astra can stall on conflicting instructions, so ask the user which one wins.
+## Ownership comes first
 
-Show one unified diff per file. Above each hunk, give the finding ID, the class and the source.
+Use the scan's provenance and inspect the source evidence. Preserve official
+OpenAI skills, plugin caches and upstream installations. This includes popular
+skills such as Playwright, Superpowers and Puppeteer, but popularity is not the
+test: every maintained upstream installation is excluded from local rewrites.
+A copy under a user directory is still upstream. Do not use a generic GitHub
+reference in the body or the existence of openai.yaml alone as proof of ownership.
 
-## Skill descriptions (S1, S2, S11)
+No ownership evidence means unverified. Determine whether the user created the
+skill from a direct statement or local history. Record exact verified local
+paths in an ownership JSON. If uncertainty remains, list the item as unresolved
+and continue other verified work. Editing this project's source repository for
+a requested release is separate from rewriting installed third-party skills.
 
-OpenAI's example:
+## Cover the requested cleanup
 
-- Bad: `Create and validate Postgres schema migrations. Use when working with databases, queries, models, or persistence.`
-- Good: `Create and validate Postgres schema migrations. Use when adding or changing a migration, or reviewing its rollout.`
+Review all personal descriptions. Budget headroom does not make verbose
+descriptions useful. Preserve task triggers and meaningful exclusions. Remove
+repeated instructions, exhaustive examples and generic persuasion from the
+description when the body already carries them. Judge each case; there is no
+mandatory character target.
 
-Put trigger words first. When Codex shortens descriptions it keeps the beginning.
+Account for every candidate as changed, kept with a reason, excluded upstream
+or unresolved. Do not substitute model changes, duplicate renames or directory
+moves for the description work the user requested.
 
-For S1, first measure `scan.py --without` with the skills the user does not use. Turning a skill off keeps it installed:
+## Description plan
 
-```toml
-[[skills.config]]
-path = "/absolute/path/to/SKILL.md"
-enabled = false
+Write a JSON file outside the repository:
+
+```json
+{
+  "local_skills": ["/absolute/path/to/personal-skill/SKILL.md"],
+  "edits": [{
+    "path": "/absolute/path/to/personal-skill/SKILL.md",
+    "sha256": "<sha256 from description_audit.rows>",
+    "description": "<reviewed replacement with task trigger and useful exclusions>",
+    "reason": "<what repetition was removed and what boundary was preserved>"
+  }]
+}
 ```
 
-## Required reading (A2)
+Use native absolute Windows paths encoded as valid JSON on Windows.
+Use `tune.py --plan <plan>` to validate and preview all changes.
+With existing patch authorization use `tune.py --plan <plan> --apply`.
+The helper rejects upstream files and unverified ownership even if an edit
+attempts to list them as local. It validates the full batch before writing,
+backs up exact original bytes, replaces only the description field, verifies
+the written bytes and seals the backup.
 
-OpenAI's example:
+Review semantic equivalence before applying. In particular, preserve exclusions
+such as read-only use, locked narration, supported file types and task routing.
+The helper protects bytes and ownership; it cannot judge meaning.
 
-- Bad: `Before every edit, read architecture.md, database.md, and deployment.md.`
-- Good: `Use architecture.md for service boundaries, database.md for schema changes, and deployment.md when preparing a deployment.`
+Keep the timestamped pre-edit scan. Compare with
+`scan.py --baseline <pre-edit-scan.json> --ownership <plan>`.
+Never use latest.json as a durable baseline because every normal scan updates it.
+If the baseline predates 0.3.0 or has only file discovery, run a new scan before
+editing. Without captured membership report per-file savings separately.
 
-## Forced testing (A3)
+## Other instruction findings
 
-Wording from OpenAI's GPT-6 Astra model guide:
+KEEP useful domain facts and safety boundaries.
+TIGHTEN unnecessary wording while preserving the rule's purpose.
+MOVE background to references when the condition for reading it is clear.
+DROP obsolete workaround instructions only after checking their purpose.
+RESOLVE conflicts using existing user intent; ask only if it does not settle them.
 
-> Do not write tests for reversible, low-impact changes that mirror the implementation.
+Required reading should point to a document when its subject is relevant.
+Testing should match the risk and affected behavior, with existing release gates
+preserved. Replace needless first-pass stops with the actual completion criteria.
+Inspect model-specific instructions in context; a model name in a reference link
+or migration example is not itself an obsolete workaround.
 
-> Run tests appropriate to the change and complete required checks. Once those pass, broaden or repeat testing only when new changes, failures, or unresolved concerns justify it; otherwise, continue toward completing the task.
+An old skills folder still works. Keep it unless the user requested migration.
+Do not traverse or move large assets and node_modules for description cleanup.
+A duplicate name can represent a different API or tool workflow. Preserve both
+until the user selects a particular redundant installation. Measure that exact
+path with --without-path, not the name shared by both copies.
 
-Where a test workflow is known to be safe, say so. OpenAI's example:
-
-> The local tests use disposable fixtures and have no production access. Run them, fix failures caused by the requested change, and rerun affected tests without asking for approval at each step.
-
-Write that only if it is true for this repository.
-
-## Stopping early (A5)
-
-A required review stop after the first implementation pulls Astra toward stopping early. Replace it with what done looks like, for example:
-
-`Done means the change runs, the affected checks pass, and the result has been inspected. Keep going until then; stop early only for decisions that change scope.`
-
-If the user does want a review point, keep it and say what should be finished before it.
-
-## Model-specific rules (A7, A8)
-
-DROP a rule that only corrected an older model. If other agents still need it (A12), leave it where they read it. Do not choose rules by asking the model which model it is.
-
-## Large or recipe-style skills (S4, S5)
-
-Keep the outcome, the decision criteria and any step whose order truly matters. If the skill has several distinct modes, move each mode's detail into references and route to it from SKILL.md. A single-mode skill does not need a router.
-
-## Deprecated folder (S6)
-
-Move `~/.codex/skills/<name>` to `~/.agents/skills/<name>`. In the plan, list every file in the folder as `create` at the new path and `delete` at the old one.
-
-## AGENTS.md over the byte limit (A1)
-
-MOVE background and long examples into docs and point to them by situation, or split rules into nested AGENTS.md files next to the code they govern.
-
-## After applying
-
-Rescan and report before and after: descriptions cut, skills dropped, AGENTS.md bytes, findings by ID.
+Do not rewrite installed upstream content to make astra-xray's findings disappear.

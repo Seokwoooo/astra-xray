@@ -18,12 +18,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from xray import __version__, agents_md, budget, config, rules  # noqa: E402
+from xray import __version__, agents_md, budget, config, rules, descriptions  # noqa: E402
 from xray import constants as C  # noqa: E402
 from xray import session as sess  # noqa: E402
 from xray import skills as sk  # noqa: E402
 from xray.archive import private_write, state_dir  # noqa: E402
 from xray.frontmatter import read_skill  # noqa: E402
+from xray.paths import local_key  # noqa: E402
 
 TARGET_MODEL = "gpt-6-astra"
 SECRET = re.compile(
@@ -41,11 +42,17 @@ def _without(names: list[str], patterns: list[str]) -> list[bool]:
     return [any(fnmatch.fnmatchcase(n, p) for p in patterns) for n in names]
 
 
-def what_if(entries: list[dict], budget_obj: budget.Budget, patterns: list[str]) -> dict:
+def what_if(entries: list[dict], budget_obj: budget.Budget, patterns: list[str], paths=(), alias_roots=None) -> dict:
     drop = _without([e["name"] for e in entries], patterns)
+    selected = {local_key(p) for p in paths}
+    drop = [d or local_key(e["path"]) in selected for e, d in zip(entries, drop)]
     kept = [e for e, d in zip(entries, drop) if not d]
-    result = budget.render_host_catalog(kept, budget_obj)
-    return {"removed": sum(drop), "report": result["report"], "warning": result["warning"],
+    plan = budget.AliasPlan(alias_roots) if alias_roots is not None else None
+    result = budget.render_host_catalog(kept, budget_obj, plan=plan)
+    return {"removed": sum(drop), "removed_entries": [{"name": e["name"], "path": e["path"]}
+                                                       for e, d in zip(entries, drop) if d],
+            "selection_note": "Name patterns remove every matching copy. Use --without-path for one copy.",
+            "report": result["report"], "warning": result["warning"],
             "used_percent": round(100 * result["cost"] / max(1, budget_obj.limit))}
 
 
@@ -64,8 +71,8 @@ def latest_catalog_input_mtime(home: Path, inv: dict) -> float | None:
 
 def catalog_comparison(observed: dict, estimated: dict) -> dict:
     """Compare catalog membership; renderer line reproduction cannot detect this drift."""
-    captured = {(s["name"], s["path"]) for s in observed["skills"]}
-    files = {(s["name"], s["path"]) for s in estimated["skills"]}
+    captured = {(s["name"], local_key(s["path"])) for s in observed["skills"]}
+    files = {(s["name"], local_key(s["path"])) for s in estimated["skills"]}
 
     def rows(items):
         return [{"name": name, "path": path} for name, path in sorted(items)]
@@ -127,6 +134,7 @@ def observed_listing(parsed: dict, budget_obj: budget.Budget, patterns: list[str
             "path": e["path"],
             "alias_root": roots.get(e["alias"]) if e["alias"] else None,
             "alias_root_order": int(e["alias"][1:]) if e["alias"] else None,
+            "file_present": disk is not None,
         })
     capture_report = {
         "total": len(captured) + parsed["omission_marker"],
@@ -150,6 +158,9 @@ def observed_listing(parsed: dict, budget_obj: budget.Budget, patterns: list[str
     reproduced = sum(1 for a, b in zip(sim["lines"], (e["line"] for e in parsed["entries"])) if a == b)
     listing = {
         "source": "session",
+        "entries": entries,
+        "alias_roots": parsed["roots"],
+        "used_units": sim["cost"],
         "catalog_complete": parsed["omission_marker"] == 0,
         "unknown_omitted_from_capture": parsed["omission_marker"],
         "report": sim["report"],
@@ -180,6 +191,8 @@ def estimated_listing(inv: dict, budget_obj: budget.Budget, patterns: list[str])
     per_skill = [dict(name=e["name"], path=e["path"], **p) for e, p in zip(entries, result["per_skill"])]
     listing = {
         "source": "files",
+        "entries": entries,
+        "used_units": result["cost"],
         "confidence": "low",
         "limitations": "App/plugin skills can be absent or extra; use a fresh matching session catalog for authoritative membership.",
         "report": result["report"],
@@ -195,13 +208,93 @@ def estimated_listing(inv: dict, budget_obj: budget.Budget, patterns: list[str])
     return listing
 
 
+def rebase_listing(previous: dict, inv: dict, cfg: dict, budget_obj: budget.Budget) -> dict:
+    """Model edits on known membership. Uncaptured cache files never join the baseline."""
+    current = {local_key(s["path"]): s for s in inv["skills"]}
+    disabled = sk._disabled_paths(cfg)
+    entries, removed = [], []
+    for original in previous["entries"]:
+        e = dict(original)
+        key = local_key(e["path"])
+        now = current.get(key)
+        reason = None
+        if key in disabled or (now and (not now["enabled"] or not now["implicit"])):
+            reason = "disabled"
+        elif e.get("file_present") and not Path(e["path"]).is_file():
+            reason = "removed_file"
+        if reason:
+            removed.append({"path": e["path"], "name": e["name"], "reason": reason})
+            continue
+        disk = read_skill(Path(e["path"])) if Path(e["path"]).is_file() else None
+        if disk and not disk["error"]:
+            e["description"] = disk["description"]
+            # Preserve a plugin namespace from the capture.
+            e["name"] = e["name"].rsplit(":", 1)[0] + ":" + disk["name"] if ":" in e["name"] else disk["name"]
+        entries.append(e)
+    roots = previous.get("alias_roots")
+    plan = budget.AliasPlan(roots) if roots is not None else None
+    sim = budget.render_host_catalog(entries, budget_obj, plan=plan)
+    known = {local_key(e["path"]) for e in previous["entries"]}
+    unobserved = [{"name": s["name"], "path": s["path"]} for s in sk.listed_entries(inv)
+                  if local_key(s["path"]) not in known]
+    return {
+        "source": "baseline", "confidence": "estimate", "entries": entries,
+        "alias_roots": roots,
+        "limitations": "Known captured membership with current file edits; a fresh task must confirm runtime membership.",
+        "catalog_complete": previous.get("catalog_complete", False),
+        "unknown_omitted_from_capture": previous.get("unknown_omitted_from_capture", 0),
+        "session": previous.get("session"), "report": sim["report"],
+        "skills": [dict(name=e["name"], path=e["path"], **s) for e, s in zip(entries, sim["per_skill"])],
+        "budget": budget_obj.to_dict(), "used_units": sim["cost"],
+        "used_percent": round(100 * sim["cost"] / max(1, budget_obj.limit)),
+        "warning": sim["warning"], "average_cut_chars": sim["average_cut_chars"],
+        "removed_since_baseline": removed, "unobserved_files": unobserved,
+        "comparison": {"before_units": previous["used_units"], "after_units": sim["cost"],
+                       "saved_units": previous["used_units"] - sim["cost"],
+                       "unit": budget_obj.kind,
+                       "before_description_chars": sum(len(e["description"]) for e in previous["entries"]),
+                       "after_description_chars": sum(len(e["description"]) for e in entries)},
+    }
+
+
+def load_baseline(path: str, cwd: Path, model: str, budget_obj: budget.Budget) -> dict:
+    data = json.loads(Path(path).expanduser().read_text(encoding="utf-8-sig"))
+    if not isinstance(data, dict) or not isinstance(data.get("skills"), dict):
+        raise ValueError("baseline must be an astra-xray scan object")
+    listing = data.get("skills", {}).get("listing", {})
+    env = data.get("environment", {})
+    if not isinstance(listing, dict) or not isinstance(env, dict) or data.get("tool") != "astra-xray" or not isinstance(listing.get("entries"), list):
+        raise ValueError("baseline must be a scan from astra-xray 0.3.0 or newer")
+    if local_key(env.get("cwd", "")) != local_key(str(cwd)):
+        raise ValueError("baseline belongs to a different project")
+    if env.get("model") != model or listing.get("budget") != budget_obj.to_dict():
+        raise ValueError("baseline target model or budget differs; scan again before comparing")
+    if listing.get("source") not in ("session", "baseline"):
+        raise ValueError("a file-only estimate cannot establish baseline membership; capture a matching task first")
+    if (listing.get("session") or {}).get("cwd_matches_scan") is False:
+        raise ValueError("baseline capture belongs to a different project")
+    if not isinstance(listing.get("used_units"), int) or any(
+        not isinstance(e, dict) or any(not isinstance(e.get(k), str) for k in ("name", "path", "description"))
+        for e in listing["entries"]
+    ):
+        raise ValueError("baseline is missing recorded descriptions or budget usage")
+    return listing
+
+
 def run(args) -> dict:
     home = Path(args.codex_home).expanduser() if args.codex_home else config.codex_home()
     cwd = Path(args.cwd).expanduser().resolve()
     cfg = config.load_config(home)
     patterns = [p.strip() for p in (args.without or "").split(",") if p.strip()]
 
-    inv = sk.inventory(cwd, home, cfg)
+    ownership = getattr(args, "ownership", None)
+    ownership_data = json.loads(Path(ownership).expanduser().read_text(encoding="utf-8-sig")) if ownership else {}
+    if not isinstance(ownership_data, dict):
+        raise ValueError("ownership must be a JSON object with local_skills")
+    local_skills = ownership_data.get("local_skills", [])
+    if not isinstance(local_skills, list) or any(not isinstance(p, str) or not Path(p).is_absolute() for p in local_skills):
+        raise ValueError("local_skills must be a list of absolute SKILL.md paths")
+    inv = sk.inventory(cwd, home, cfg, local_skills)
     catalog_changed = latest_catalog_input_mtime(home, inv)
     explicit_session = None if args.session == "auto" else args.session
     found = None if args.session == "none" else sess.find_session(
@@ -215,6 +308,10 @@ def run(args) -> dict:
         config.model_context_window(cfg, home, model)
     max_tokens = config.get(cfg, "skills.max_context_tokens")
     budget_obj = budget.metadata_budget(window, max_tokens if isinstance(max_tokens, int) else None)
+    stale = False
+    if found is None and args.session == "auto":
+        found = sess.find_session(home, cwd=cwd)
+        stale = found is not None
     shell_cli = config.codex_cli_version()
     effective_cli = (found or {}).get("cli_version") or shell_cli
 
@@ -246,6 +343,16 @@ def run(args) -> dict:
         observed["session"]["fresh_for_catalog"] = sess.catalog_is_fresh(found, catalog_changed)
     estimated = estimated_listing(inv, budget_obj, patterns)
     primary = observed or estimated
+    baseline = getattr(args, "baseline", None)
+    if baseline:
+        primary = rebase_listing(load_baseline(baseline, cwd, model, budget_obj), inv, cfg, budget_obj)
+        primary["baseline_path"] = str(Path(baseline).expanduser())
+    elif stale:
+        primary = rebase_listing(observed, inv, cfg, budget_obj)
+        primary.pop("comparison", None)  # old full descriptions were not recorded, so no before/after proof
+        primary["limitations"] += " The source session predates local changes; no historical saving is claimed."
+    if patterns or getattr(args, "without_path", None):
+        primary["what_if"] = what_if(primary["entries"], budget_obj, patterns, getattr(args, "without_path", None) or [], primary.get("alias_roots"))
     comparison = catalog_comparison(observed, estimated) if observed else None
 
     global_info = agents_md.global_instructions(home)
@@ -255,12 +362,17 @@ def run(args) -> dict:
     findings += rules.lint_agents(global_info, chain)
     findings += lint_loaded_instruction_text(global_info, chain)
     findings += rules.lint_skills(inv, primary)
+    description_audit = descriptions.audit(inv, primary)
+    for item in description_audit["rows"]:
+        if item["disposition"] in ("review_description", "verify_ownership"):
+            findings.append(rules.finding("S12", "info", "Long description to review even without budget overflow", "blog",
+                                         item["path"], note=f"{item['description_chars']} chars; ~{item['description_estimated_tokens']} tokens; {item['disposition']}. Length is a review signal, not a rewrite quota."))
     for item in findings:
         if "excerpt" in item:
             item["excerpt"] = mask(item["excerpt"])
 
     surface = [str(p) for p in agents_md.instruction_files(home, chain, global_info)]
-    surface += [s["path"] for s in inv["skills"] if s["root_kind"] in rules.EDITABLE_ROOT_KINDS]
+    surface += [s["path"] for s in inv["skills"] if s["provenance"]["editable"]]
     surface = sorted(dict.fromkeys(p for p in surface if Path(p).exists()))
 
     return {
@@ -271,10 +383,11 @@ def run(args) -> dict:
         "environment": env,
         "skills": {
             "listing": primary,
-            "estimate_from_files": estimated if observed else None,
+            "estimate_from_files": estimated if primary is not estimated else None,
             "catalog_comparison": comparison,
             "roots": inv["roots"],
-            "installed": [{k: s[k] for k in ("name", "path", "scope", "root_kind", "enabled", "implicit", "error")} for s in inv["skills"]],
+            "installed": [{k: s.get(k) for k in ("name", "path", "scope", "root_kind", "enabled", "implicit", "error", "description", "sha256", "provenance")} for s in inv["skills"]],
+            "description_audit": description_audit,
         },
         "agents_md": {"global": global_info, "project": chain},
         "findings": findings,
@@ -309,10 +422,12 @@ def summary_text(report: dict, out_path: Path) -> str:
             cautions.append("catalog predates local config/skill changes")
         if cautions:
             lines.append(f"            explicit session caution: {', '.join(cautions)}")
-        if not listing["catalog_complete"]:
-            lines.append(f"            incomplete capture: {listing['unknown_omitted_from_capture']} unknown skills were omitted by the source session")
+    elif listing["source"] == "baseline":
+        lines.append(f"Skills      {rep['included']} modeled on known catalog membership (estimate; fresh task needed for runtime confirmation)")
     else:
         lines.append(f"Skills      {rep['included']} estimated from files (no fresh matching session catalog; low confidence)")
+    if listing.get("unknown_omitted_from_capture"):
+        lines.append(f"            incomplete capture: {listing['unknown_omitted_from_capture']} unknown skills were omitted by the source session")
     lines.append(f"            budget {listing['budget']['limit']:,} {unit}, {listing['used_percent']}% used · "
                  f"{rep['truncated_count']} descriptions cut ({rep['truncated_chars']:,} chars) · {rep['omitted']} dropped")
     if rep["truncated_count"] or rep["omitted"]:
@@ -321,6 +436,11 @@ def summary_text(report: dict, out_path: Path) -> str:
     if listing.get("calibration"):
         cal = listing["calibration"]
         lines.append(f"            target simulation vs capture: {cal['reproduced_lines']}/{cal['observed_lines']} lines reproduced")
+    if listing.get("comparison"):
+        diff = listing["comparison"]
+        lines.append(f"            baseline: {diff['before_units']} -> {diff['after_units']} {diff['unit']} ({diff['saved_units']} saved)")
+    audit = report["skills"]["description_audit"]
+    lines.append(f"Descriptions {audit['review_count']} to review ({audit['ownership_review_count']} need ownership verification); {audit['excluded_upstream_count']} upstream/managed excluded")
     comparison = report["skills"].get("catalog_comparison")
     if comparison and not comparison["matches"]:
         lines.append(f"            file estimate differs: {comparison['files_only_count']} extra, {comparison['session_only_count']} missing")
@@ -346,15 +466,22 @@ def main(argv=None) -> int:
     parser.add_argument("--model", help=f"target model to simulate (default: {TARGET_MODEL}; independent of the source session model)")
     parser.add_argument("--context-window", type=int, help="override the context window used for the skills budget")
     parser.add_argument("--without", help="comma-separated skill names or globs to simulate turning off, e.g. 'firecrawl-*'")
+    parser.add_argument("--without-path", action="append", help="exclude one exact SKILL.md path in a simulation; repeatable")
+    parser.add_argument("--baseline", help="pre-edit scan JSON; compare current files on its captured membership")
+    parser.add_argument("--ownership", help="JSON with local_skills: exact paths whose local authorship has been verified")
     parser.add_argument("--out", help="where to write the JSON report")
     parser.add_argument("--json", action="store_true", help="print the JSON report instead of the summary")
     args = parser.parse_args(argv)
 
-    report = run(args)
+    try:
+        report = run(args)
+    except (ValueError, OSError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        return 1
     if args.out:
         out_path = Path(args.out).expanduser()
     else:
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         out_path = state_dir() / "scans" / f"scan-{stamp}.json"
     payload = json.dumps(report, ensure_ascii=False, indent=2)
     private_write(out_path, payload.encode("utf-8"))

@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 from . import constants as C
+from .paths import is_within, path_key
 
 try:  # Python 3.11+
     import tomllib as _toml
@@ -25,7 +26,7 @@ def codex_home() -> Path:
 def _parse_value(raw: str):
     raw = raw.strip()
     if raw.startswith('"') and raw.endswith('"'):
-        return raw[1:-1].replace('\\"', '"')
+        return json.loads(raw)
     if raw.startswith("'") and raw.endswith("'"):
         return raw[1:-1]
     if raw in ("true", "false"):
@@ -38,7 +39,8 @@ def _parse_value(raw: str):
 
 
 def _split_key(header: str) -> list[str]:
-    return [part.strip('"') for part in re.findall(r'"[^"]*"|[^.]+', header)]
+    return [_parse_value(part.strip()) if part.strip().startswith(('"', "'")) else part.strip()
+            for part in re.findall(r'"(?:\\.|[^"\\])*"|\'[^\']*\'|[^.]+', header)]
 
 
 def _fallback_toml(text: str) -> dict:
@@ -71,7 +73,7 @@ def _fallback_toml(text: str) -> dict:
 def load_config(home: Path) -> dict:
     path = home / "config.toml"
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
     except OSError:
         return {}
     try:
@@ -132,11 +134,11 @@ def model_context_window(cfg: dict, home: Path, model: str | None) -> tuple[int 
 def project_trust(cfg: dict, path: Path) -> str | None:
     projects = get(cfg, "projects", {}) or {}
     best, best_len = None, -1
-    target = str(path)
+    target = path_key(str(path))
     for key, value in projects.items():
         if not isinstance(value, dict):
             continue
-        key_norm = key.rstrip("/")
-        if (target == key_norm or target.startswith(key_norm + "/")) and len(key_norm) > best_len:
+        key_norm = path_key(key).rstrip("/")
+        if is_within(target, key_norm) and len(key_norm) > best_len:
             best, best_len = value.get("trust_level"), len(key_norm)
     return best

@@ -360,6 +360,7 @@ class BackupAndRestore(unittest.TestCase):
         self.assertEqual(code, 0, result)
         self.assertEqual(self.edited.read_text(), "original\n")
 
+    @unittest.skipIf(os.name == "nt", "POSIX mode bits do not represent Windows ACLs")
     def test_backup_is_private(self):
         code, made = run_cli(backup_cli, "create", "--plan", str(self.plan))
         self.assertEqual(os.stat(made["backup"]).st_mode & 0o777, 0o600)

@@ -10,6 +10,7 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from .paths import local_key
 
 LOCATOR_KINDS = ("file", "executor package", "orchestrator package", "custom resource")
 ROOT_LINE = re.compile(r"^- `(r\d+)` = `(.*)`$")
@@ -49,10 +50,7 @@ def cwd_matches(info: dict, cwd: Path) -> bool:
     raw = info.get("cwd")
     if not raw:
         return False
-    try:
-        return Path(raw).expanduser().resolve() == cwd.expanduser().resolve()
-    except OSError:
-        return str(Path(raw).expanduser()) == str(cwd.expanduser())
+    return local_key(raw) == local_key(str(cwd))
 
 
 def catalog_is_fresh(info: dict, not_before: float | None) -> bool:
