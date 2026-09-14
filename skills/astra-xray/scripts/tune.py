@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from xray import archive, budget  # noqa: E402
+from xray.constants import MAX_CATALOG_DESCRIPTION_CHARS  # noqa: E402
 from xray.frontmatter import read_skill, replace_description  # noqa: E402
 from xray.paths import local_key  # noqa: E402
 from xray.provenance import classify  # noqa: E402
@@ -55,8 +56,10 @@ def prepare(plan):
         if info["error"]:
             raise ValueError(f"{path}: {info['error']}")
         desc = edit["description"]
-        if not isinstance(desc, str) or len(desc) > 1024:
-            raise ValueError(f"description exceeds Codex's field limit: {path}")
+        if not isinstance(desc, str):
+            raise ValueError(f"description must be a string: {path}")
+        if len(desc) > MAX_CATALOG_DESCRIPTION_CHARS:
+            raise ValueError(f"proposed description exceeds the {MAX_CATALOG_DESCRIPTION_CHARS}-character catalog cap: {path}")
         after = replace_description(before, desc)
         if info["description"] == desc:
             raise ValueError(f"description is unchanged: {path}; record a keep decision instead")
